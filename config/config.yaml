@@ -1,0 +1,39 @@
+llm:
+  provider: "ollama" # "azure"
+  
+  ollama:
+    base_url: "http://localhost:11434"
+    model: "phi:latest"
+    temperature: 0.1
+    max_tokens: 2048
+    timeout: 300
+    retry_count: 3
+  
+  # Azure AI Configuration
+  # azure:
+  #   endpoint: "INSERT_YOUR_AZURE_ENDPOINT_HERE"
+  #   api_key: "INSERT_YOUR_API_KEY_HERE"
+  #   model: "phi-3-mini-4k-instruct"
+  #   temperature: 0.1
+  #   max_tokens: 2048
+
+analysis:
+  max_packets_small: 1000
+  max_payload_display: 500
+  batch_size: 100
+  
+  trading:
+    fix_ports: [9878, 9880, 9881]
+    itch_ports: [26477, 26478]
+    latency_threshold_ms: 5
+
+report:
+  output_format: "html"  # "html", "markdown", "json"
+  include_packet_details: true
+  include_charts: true
+  max_packets_in_report: 100
+
+files:
+  input_directory: "data/input"
+  output_directory: "data/output"
+  supported_extensions: [".pcap", ".pcapng", ".cap"]
