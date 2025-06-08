@@ -537,7 +537,6 @@ class TradingAnalyzer:
             delattr(self, '_last_packet_time')
 
     def debug_session_state(self) -> Dict[str, Any]:
-        """Debug method to inspect current session state"""
         return {
             'orders_count': len(self.session_data['orders']),
             'executions_count': len(self.session_data['executions']),
