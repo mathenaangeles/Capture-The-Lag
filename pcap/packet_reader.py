@@ -24,9 +24,9 @@ class PacketReader:
     
     def read_pcap_file(self, file_path: str, use_pyshark: bool = False) -> Generator[Dict[str, Any], None, None]:
         if not os.path.exists(file_path):
-            raise FileNotFoundError(f"PCAP file not found: {file_path}")
+            raise FileNotFoundError(f"PCAP File Not Found: {file_path}")
         file_size = os.path.getsize(file_path)
-        self.logger.info(f"Reading PCAP file: {file_path} ({file_size} bytes)")
+        self.logger.info(f"Reading PCAP File: {file_path} ({file_size} bytes)")
         if use_pyshark and PYSHARK_AVAILABLE:
             yield from self._read_with_pyshark(file_path)
         else:
@@ -36,16 +36,14 @@ class PacketReader:
         try:
             packets = rdpcap(file_path)
             self.logger.info(f"Loaded {len(packets)} packets with Scapy")
-            
             for i, packet in enumerate(packets):
                 if i >= self.max_packets_small:
                     self.logger.warning(f"Limiting to {self.max_packets_small} packets for Scapy analysis")
                     break
-                
                 packet_info = self._extract_scapy_packet_info(packet, i)
                 yield packet_info
         except Exception as e:
-            self.logger.error(f"Error reading with Scapy: {e}")
+            self.logger.error(f"Scapy Error: {e}")
             raise
     
     def _read_with_pyshark(self, file_path: str) -> Generator[Dict[str, Any], None, None]:
@@ -54,20 +52,16 @@ class PacketReader:
         try:
             cap = pyshark.FileCapture(file_path)
             packet_count = 0
-            
             for packet in cap:
                 packet_info = self._extract_pyshark_packet_info(packet, packet_count)
                 yield packet_info
                 packet_count += 1
-                
                 if packet_count % 1000 == 0:
-                    self.logger.info(f"Processed {packet_count} packets...")
-            
+                    self.logger.info(f"Processed {packet_count} packets with PyShark")
             cap.close()
             self.logger.info(f"Completed processing {packet_count} packets with PyShark")
-            
         except Exception as e:
-            self.logger.error(f"Error reading with PyShark: {e}")
+            self.logger.error(f"PyShark Error: {e}")
             raise
     
     def _extract_scapy_packet_info(self, packet: Packet, index: int) -> Dict[str, Any]:
@@ -84,7 +78,7 @@ class PacketReader:
             'seq_num': None,
             'ack_num': None,
             'payload_size': 0,
-            'payload_preview': None,
+            'payload': None,
             'raw_packet': packet
         }
         if IP in packet:
@@ -106,8 +100,7 @@ class PacketReader:
         if Raw in packet:
             payload = bytes(packet[Raw])
             packet_info['payload_size'] = len(payload)
-            packet_info['payload_preview'] = self._format_payload_preview(payload)
-        
+            packet_info['payload'] = self._decode_payload(payload)
         return packet_info
     
     def _extract_pyshark_packet_info(self, packet, index: int) -> Dict[str, Any]:
@@ -124,10 +117,9 @@ class PacketReader:
             'seq_num': None,
             'ack_num': None,
             'payload_size': 0,
-            'payload_preview': None,
+            'payload': None,
             'raw_packet': packet
         }
-        
         if hasattr(packet, 'ip'):
             packet_info['src_ip'] = packet.ip.src
             packet_info['dst_ip'] = packet.ip.dst
@@ -135,7 +127,6 @@ class PacketReader:
                 packet_info['ip_id'] = packet.ip.id
             if hasattr(packet.ip, 'ttl'):
                 packet_info['ttl'] = packet.ip.ttl
-        
         if hasattr(packet, 'tcp'):
             packet_info['src_port'] = int(packet.tcp.srcport)
             packet_info['dst_port'] = int(packet.tcp.dstport)
@@ -147,23 +138,20 @@ class PacketReader:
                 packet_info['ack_num'] = int(packet.tcp.ack)
             if hasattr(packet.tcp, 'window_size_value'):
                 packet_info['window_size'] = int(packet.tcp.window_size_value)
-        
         if hasattr(packet, 'udp'):
             packet_info['src_port'] = int(packet.udp.srcport)
             packet_info['dst_port'] = int(packet.udp.dstport)
-        
         try:
             if hasattr(packet, 'data') and hasattr(packet.data, 'data'):
                 payload_hex = packet.data.data.replace(':', '')
                 payload = bytes.fromhex(payload_hex)
                 packet_info['payload_size'] = len(payload)
-                packet_info['payload_preview'] = self._format_payload_preview(payload)
+                packet_info['payload'] = self._decode_payload(payload)
         except:
             pass 
         return packet_info
     
     def _get_protocol_name(self, packet: Packet) -> str:
-        """Get protocol name from Scapy packet"""
         if TCP in packet:
             return "TCP"
         elif UDP in packet:
@@ -185,18 +173,24 @@ class PacketReader:
             'CWR': bool(flags & 0x80)
         }
     
-    def _format_payload_preview(self, payload: bytes) -> str:
+    def _decode_payload(self, payload):
         if not payload:
-            return "No payload"
-        preview_payload = payload[:self.max_payload_display]
+            return "No Payload"
+        payload = payload[:self.max_payload_display]
         try:
-            ascii_text = preview_payload.decode('ascii', errors='ignore')
-            if ascii_text and ascii_text.isprintable():
-                return f"ASCII: {ascii_text[:100]}..."
-        except:
+            utf_text = payload.decode('utf-8', errors='ignore')
+            if utf_text and utf_text.strip().isprintable():
+                return f"UTF-8: {utf_text}"
+        except Exception:
             pass
-        hex_preview = preview_payload.hex()
-        return f"HEX: {hex_preview[:200]}..."
+        try:
+            ascii_text = payload.decode('ascii', errors='ignore')
+            if ascii_text and ascii_text.strip().isprintable():
+                return f"ASCII: {ascii_text}"
+        except Exception:
+            pass
+        hex_preview = payload.hex()
+        return f"HEX: {hex_preview}"
     
     def get_file_statistics(self, file_path: str) -> Dict[str, Any]:
         try:
@@ -233,18 +227,18 @@ class PacketReader:
                 'packets_per_second': packet_count / duration if duration > 0 else 0
             }
         except Exception as e:
-            self.logger.error(f"Error getting file statistics: {e}")
+            self.logger.error(f"File Statistics Error: {e}")
             return {"error": str(e)}
     
     def find_pcap_files(self, directory: str) -> List[str]:
         pcap_files = []
         supported_extensions = self.config['files']['supported_extensions']
         if not os.path.exists(directory):
-            self.logger.warning(f"Directory not found: {directory}")
+            self.logger.warning(f"Directory Not Found: {directory}")
             return pcap_files
         for root, dirs, files in os.walk(directory):
             for file in files:
                 if any(file.lower().endswith(ext) for ext in supported_extensions):
                     pcap_files.append(os.path.join(root, file))
-        self.logger.info(f"Found {len(pcap_files)} PCAP files in {directory}...")
+        self.logger.info(f"Found {len(pcap_files)} PCAP files in {directory}")
         return pcap_files

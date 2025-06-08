@@ -3,7 +3,6 @@ import os
 import json
 import yaml
 from datetime import datetime
-from tabulate import tabulate
 from typing import Dict, List, Any
 
 class ReportGenerator:
@@ -16,12 +15,7 @@ class ReportGenerator:
         self.max_packets_in_report = self.config['report']['max_packets_in_report']
         os.makedirs(self.output_directory, exist_ok=True)
 
-    def generate_comprehensive_report(self, 
-                                    file_path: str,
-                                    packet_analyses: List[Dict[str, Any]],
-                                    trading_stats: Dict[str, Any],
-                                    file_stats: Dict[str, Any]) -> str:
-        """Generate comprehensive analysis report"""
+    def generate_comprehensive_report(self, file_path: str, packet_analyses: List[Dict[str, Any]], trading_stats: Dict[str, Any], file_stats: Dict[str, Any]) -> str:
         report_data = {
             'metadata': {
                 'file_path': file_path,
@@ -42,9 +36,7 @@ class ReportGenerator:
         else:
             return self._generate_markdown_report(report_data)
     
-    def _generate_executive_summary(self, 
-                                  packet_analyses: List[Dict[str, Any]], 
-                                  trading_stats: Dict[str, Any]) -> Dict[str, Any]:        
+    def _generate_executive_summary(self, packet_analyses: List[Dict[str, Any]], trading_stats: Dict[str, Any]) -> Dict[str, Any]:        
         total_packets = len(packet_analyses)
         trading_packets = sum(1 for p in packet_analyses if p.get('trading_analysis', {}).get('is_trading', False))
         total_issues = 0
@@ -129,9 +121,7 @@ class ReportGenerator:
             'payload_statistics': payload_stats
         }
     
-    def _generate_recommendations(self, 
-                                packet_analyses: List[Dict[str, Any]], 
-                                trading_stats: Dict[str, Any]) -> List[Dict[str, str]]:
+    def _generate_recommendations(self, packet_analyses: List[Dict[str, Any]], trading_stats: Dict[str, Any]) -> List[Dict[str, str]]:
         recommendations = []
         issue_counts = {}
         for packet in packet_analyses:

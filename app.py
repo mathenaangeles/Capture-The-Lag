@@ -6,11 +6,11 @@ import plotly.express as px
 from datetime import datetime
 import plotly.graph_objects as go
 from typing import Dict, Any, List
-
 from pcap.llm_client import LLMClient
 from pcap.packet_reader import PacketReader
 from pcap.trading_analyzer import TradingAnalyzer
 from pcap.report_generator import ReportGenerator
+from pcap.anolmany_detector import MLAnomalyDetector
 
 class StreamlitPCAPAnalyzer:
     def __init__(self, config_path: str = "config/config.yaml"):
@@ -20,174 +20,74 @@ class StreamlitPCAPAnalyzer:
         self.llm_client = LLMClient(config_path)
         self.trading_analyzer = TradingAnalyzer(config_path)
         self.report_generator = ReportGenerator(config_path)
+        self.anomaly_detector = MLAnomalyDetector()
         self.input_dir = self.config['files']['input_directory']
         self.output_dir = self.config['files']['output_directory']
         os.makedirs(self.input_dir, exist_ok=True)
         os.makedirs(self.output_dir, exist_ok=True)
     
-    def analyze_directory_upload(self, directory_path: str) -> Dict[str, Any]:
+    def _process_packet_analysis(self, file_path: str, file_stats: Dict, use_pyshark: bool = False, progress_callback=None) -> Dict[str, Any]:
         try:
-            pcap_files = self.packet_reader.find_pcap_files(directory_path)
-            if not pcap_files:
-                return {"error": f"No PCAP files found in {directory_path}"}
-            batch_results = []
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            for i, file_path in enumerate(pcap_files):
-                filename = os.path.basename(file_path)
-                status_text.text(f"Processing {filename} ({i+1}/{len(pcap_files)})")
-                try:
-                    results = self._analyze_file_path(file_path)
-                    if "error" not in results:
-                        batch_results.append({
-                            'filename': filename,
-                            'success': True,
-                            'total_packets': len(results['packet_analyses']),
-                            'health_score': results['executive_summary']['health_score'],
-                            'total_issues': results['executive_summary']['total_issues'],
-                            'trading_packets': results['executive_summary']['trading_packets']
-                        })
-                    else:
-                        batch_results.append({
-                            'filename': filename,
-                            'success': False,
-                            'error': results['error']
-                        })
-                except Exception as e:
-                    batch_results.append({
-                        'filename': filename,
-                        'success': False,
-                        'error': str(e)
-                    })
-                progress_bar.progress((i + 1) / len(pcap_files))
-            
-            return {
-                'batch_results': batch_results,
-                'pcap_files_found': pcap_files
-            }
-        finally:
-            try:
-                progress_bar.empty()
-                status_text.empty()
-            except:
-                pass
-
-    def _analyze_file_path(self, file_path: str, use_pyshark: bool = False) -> Dict[str, Any]:
-        try:
-            file_stats = self.packet_reader.get_file_statistics(file_path)
-            if "error" in file_stats:
-                return {"error": file_stats["error"]}
             packet_analyses = []
             self.trading_analyzer.reset_session_data()
-            for packet_info in self.packet_reader.read_pcap_file(file_path, use_pyshark):
-                trading_analysis = self.trading_analyzer.analyze_trading_packet(packet_info)
-                llm_analysis = {}
-                if trading_analysis.get('is_trading', False):
-                    try:
-                        llm_analysis = self.llm_client.analyze_packet(packet_info)
-                    except Exception as e:
-                        llm_analysis = {"error": str(e)}
-                packet_analyses.append({
-                    'packet_info': packet_info,
-                    'trading_analysis': trading_analysis,
-                    'llm_analysis': llm_analysis
-                })
-            trading_stats = self.trading_analyzer.get_session_statistics()
-            executive_summary = self.report_generator._generate_executive_summary(
-                packet_analyses, trading_stats)
-            network_analysis = self.report_generator._generate_network_analysis(
-                packet_analyses)
-            recommendations = self.report_generator._generate_recommendations(
-                packet_analyses, trading_stats)
-            try:
-                llm_session_analysis = self.llm_client.analyze_trading_session({
-                    'total_packets': len(packet_analyses),
-                    'duration': file_stats.get('duration_seconds', 0),
-                    'avg_latency': trading_stats.get('latency_stats', {}).get('avg_ms', 0),
-                    'packet_loss': 0,
-                    'retransmissions': trading_stats.get('connection_health', {}).get('connection_resets', 0),
-                    'protocols': executive_summary.get('protocol_distribution', {}),
-                    'order_messages': trading_stats.get('total_orders', 0),
-                    'execution_messages': trading_stats.get('total_executions', 0),
-                    'rejected_orders': trading_stats.get('total_rejections', 0),
-                    'cancel_messages': trading_stats.get('total_cancellations', 0),
-                    'fix_messages': sum(1 for analysis in packet_analyses if 'FIX' in str(analysis.get('packet_info', {}).get('payload_preview', ''))),
-                    'itch_messages': sum(1 for analysis in packet_analyses if 'ITCH' in str(analysis.get('packet_info', {}).get('payload_preview', '')))
-                })
-            except Exception as e:
-                llm_session_analysis = {"error": f"Session analysis failed: {str(e)}"}
-            return {
-                'file_stats': file_stats,
-                'packet_analyses': packet_analyses,
-                'trading_stats': trading_stats,
-                'executive_summary': executive_summary,
-                'network_analysis': network_analysis,
-                'recommendations': recommendations,
-                'llm_session_analysis': llm_session_analysis
-            }
-        except Exception as e:
-            return {"error": str(e)}
-        
-    def analyze_uploaded_file(self, uploaded_file, use_pyshark: bool = False) -> Dict[str, Any]:
-        input_path = os.path.join(self.input_dir, 
-                                f"upload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pcap")
-        with open(input_path, "wb") as f:
-            f.write(uploaded_file.getvalue())
-        try:
-            file_stats = self.packet_reader.get_file_statistics(input_path)
-            if "error" in file_stats:
-                return {"error": file_stats["error"]}
-            packet_analyses = []
-            self.trading_analyzer.reset_session_data()
-            progress_bar = st.progress(0)
-            status_text = st.empty()
             packet_count = 0
             total_packets = file_stats.get('packet_count', 0)
             if isinstance(total_packets, str):
                 total_packets = int(total_packets.replace('+', ''))
-            
-            for packet_info in self.packet_reader.read_pcap_file(input_path, use_pyshark):
+            tcp_streams = {}
+            packet_loss_counter = 0
+            for packet_info in self.packet_reader.read_pcap_file(file_path, use_pyshark):
+                if packet_info.get('protocol') == 'TCP':
+                    key = (
+                        packet_info.get('src_ip'),
+                        packet_info.get('src_port'),
+                        packet_info.get('dst_ip'),
+                        packet_info.get('dst_port')
+                    )
+                    current_seq = packet_info.get('seq_num')
+                    payload_size = packet_info.get('payload_size', 0)
+                    if None not in key and current_seq is not None:
+                        expected_seq = tcp_streams.get(key)
+                        if expected_seq is not None and current_seq > expected_seq:
+                            packet_info['packet_loss_detected'] = True
+                            packet_loss_counter += 1
+                        tcp_streams[key] = max(current_seq + payload_size, tcp_streams.get(key, 0))
                 trading_analysis = self.trading_analyzer.analyze_trading_packet(packet_info)
-                llm_analysis = {}
-                if trading_analysis.get('is_trading', False):
-                    try:
-                        llm_analysis = self.llm_client.analyze_packet(packet_info)
-                    except Exception as e:
-                        st.warning(f"LLM analysis failed: {str(e)}")
-                        llm_analysis = {"error": str(e)}
+                packet_analysis = self.llm_client.analyze_packet(packet_info)
                 packet_analyses.append({
                     'packet_info': packet_info,
                     'trading_analysis': trading_analysis,
-                    'llm_analysis': llm_analysis
+                    'packet_analysis': packet_analysis
                 })
                 packet_count += 1
-                if packet_count % 50 == 0 or packet_count <= 10:
-                    progress = min(packet_count / max(total_packets, 1), 1.0)
-                    progress_bar.progress(progress)
-                    status_text.text(f"Analyzed {packet_count}/{total_packets} packets...")
-            progress_bar.progress(1.0)
-            status_text.text("Analysis Complete")
+                if progress_callback and (packet_count % 50 == 0 or packet_count <= 10):
+                    progress_callback(packet_count, total_packets)
             trading_stats = self.trading_analyzer.get_session_statistics()
             executive_summary = self.report_generator._generate_executive_summary(packet_analyses, trading_stats)
             network_analysis = self.report_generator._generate_network_analysis(packet_analyses)
             recommendations = self.report_generator._generate_recommendations(packet_analyses, trading_stats)
+            session_data = {
+                'total_packets': len(packet_analyses),
+                'duration': file_stats.get('duration_seconds', 0),
+                'avg_latency': trading_stats.get('latency_stats', {}).get('avg_ms', 0),
+                'packet_loss': packet_loss_counter,
+                'retransmissions': trading_stats.get('connection_health', {}).get('connection_resets', 0),
+                'protocols': executive_summary.get('protocol_distribution', {}),
+                'order_messages': trading_stats.get('total_orders', 0),
+                'execution_messages': trading_stats.get('total_executions', 0),
+                'rejected_orders': trading_stats.get('total_rejections', 0),
+                'cancel_messages': trading_stats.get('total_cancellations', 0),
+                'fix_messages': sum(1 for analysis in packet_analyses if 'FIX' in str(analysis.get('packet_info', {}).get('payload', ''))),
+                'itch_messages': sum(1 for analysis in packet_analyses if 'ITCH' in str(analysis.get('packet_info', {}).get('payload', '')))
+            }
+            llm_session_analysis = self.llm_client.analyze_trading_session(session_data)   
+            anomalies = {}
             try:
-                llm_session_analysis = self.llm_client.analyze_trading_session({
-                    'total_packets': len(packet_analyses),
-                    'duration': file_stats.get('duration_seconds', 0),
-                    'avg_latency': trading_stats.get('latency_stats', {}).get('avg_ms', 0),
-                    'packet_loss': 0,
-                    'retransmissions': trading_stats.get('connection_health', {}).get('connection_resets', 0),
-                    'protocols': executive_summary.get('protocol_distribution', {}),
-                    'order_messages': trading_stats.get('total_orders', 0),
-                    'execution_messages': trading_stats.get('total_executions', 0),
-                    'rejected_orders': trading_stats.get('total_rejections', 0),
-                    'cancel_messages': trading_stats.get('total_cancellations', 0),
-                    'fix_messages': sum(1 for analysis in packet_analyses if 'FIX' in str(analysis.get('packet_info', {}).get('payload_preview', ''))),
-                    'itch_messages': sum(1 for analysis in packet_analyses if 'ITCH' in str(analysis.get('packet_info', {}).get('payload_preview', '')))
-                })
+                features = self.anomaly_detector.extract_features(packet_analyses, trading_stats)
+                self.anomaly_detector.train(features)
+                anomalies = self.anomaly_detector.detect_anomalies(features)  
             except Exception as e:
-                llm_session_analysis = {"error": f"Session analysis failed: {str(e)}"}
+                pass       
             return {
                 'file_stats': file_stats,
                 'packet_analyses': packet_analyses,
@@ -196,15 +96,38 @@ class StreamlitPCAPAnalyzer:
                 'network_analysis': network_analysis,
                 'recommendations': recommendations,
                 'llm_session_analysis': llm_session_analysis,
-                'file_path': input_path
-            } 
+                'anomalies': anomalies
+            }
+        except Exception as e:
+            return {"error": str(e)}
+        
+    def analyze_uploaded_file(self, uploaded_file, use_pyshark: bool = False) -> Dict[str, Any]:
+        input_path = os.path.join(self.input_dir, f"{uploaded_file.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pcap")
+        with open(input_path, "wb") as f:
+            f.write(uploaded_file.getvalue())
+        try:
+            file_stats = self.packet_reader.get_file_statistics(input_path)
+            if "error" in file_stats:
+                return {"error": file_stats["error"]}
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            def progress_callback(current, total):
+                progress = min(current / max(total, 1), 1.0)
+                progress_bar.progress(progress)
+                status_text.text(f"Analyzed {current:,}/{total:,} packets...")
+            result = self._process_packet_analysis(input_path, file_stats, use_pyshark, progress_callback)
+            progress_bar.progress(1.0)
+            status_text.text("Analysis Complete")
+            if "error" not in result:
+                result['file_path'] = input_path
+            return result
         finally:
             try:
                 progress_bar.empty()
                 status_text.empty()
             except:
                 pass
-
+    
     def analyze_batch_files(self, uploaded_files: List) -> Dict[str, Any]:
         batch_results = []
         progress_bar = st.progress(0)
@@ -244,55 +167,94 @@ class StreamlitPCAPAnalyzer:
 def render_executive_summary(executive_summary: Dict[str, Any], trading_stats: Dict[str, Any] = None):
     st.subheader("📊 Executive Summary")
     health_score = executive_summary['health_score']
-    health_color = "green" if health_score >= 80 else "orange" if health_score >= 60 else "red"
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number+delta",
+        value=health_score,
+        domain={'x': [0, 1], 'y': [0, 1]},
+        title={'text': "System Health Score"},
+        delta={'reference': 80},
+        gauge={
+            'axis': {'range': [None, 100]},
+            'bar': {'color': "blue"},
+            'steps': [
+                {'range': [0, 50], 'color': "lightgray"},
+                {'range': [50, 80], 'color': "gray"}
+            ],
+            'threshold': {
+                'line': {'color': "red", 'width': 4},
+                'thickness': 0.75,
+                'value': 90
+            }
+        }
+    ))
+    st.plotly_chart(fig, use_container_width=True)
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric(
-            "Health Score",
-            f"{health_score}/100",
-            delta=None,
-            help="Overall system health based on issues, latency, and rejections"
-        )
-        st.markdown(f"<div style='color: {health_color}'>●</div>", unsafe_allow_html=True)
+        st.metric("Total Packets", f"{executive_summary['total_packets']:,}", help="Total number of packets analyzed")
     with col2:
-        st.metric(
-            "Total Packets",
-            f"{executive_summary['total_packets']:,}",
-            help="Total number of packets analyzed"
-        )
+        st.metric("Trading Traffic", f"{executive_summary['trading_percentage']:.1f}%", help="Percentage of packets containing trading data")
     with col3:
-        trading_pct = executive_summary['trading_percentage']
-        st.metric(
-            "Trading Traffic",
-            f"{trading_pct:.1f}%",
-            help="Percentage of packets containing trading data"
-        )
+        st.metric("Total Issues", f"{executive_summary['total_issues']}", help="Total number of issues detected")
     with col4:
-        st.metric(
-            "Issues Found",
-            f"{executive_summary['total_issues']} ({executive_summary['critical_issues']} critical)",
-            help="Total issues detected, with critical issues count"
-        )
-    if trading_stats:
-        st.write("**Trading Performance Overview**")
-        col1, col2, col3, col4 = st.columns(4)
+        st.metric("Critical Issues", f"{executive_summary['critical_issues']}", help="Total number of issues classified as critical")
+    if trading_stats and trading_stats.get('total_orders', 0) > 0:
+        st.write("**📈 Trading Performance Metrics**")
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        orders = trading_stats.get('total_orders', 0)
+        executions = trading_stats.get('total_executions', 0)
+        rejections = trading_stats.get('total_rejections', 0)
+        cancellations = trading_stats.get('total_cancellations', 0)
+        latency_stats = trading_stats.get('latency_stats', {})
         with col1:
-            orders = trading_stats.get('total_orders', 0)
-            executions = trading_stats.get('total_executions', 0)
-            fill_rate = (executions / orders * 100) if orders > 0 else 0
-            st.metric("Fill Rate", f"{fill_rate:.1f}%", help="Percentage of orders that were executed")
+            st.metric("Total Orders", f"{orders:,}")
         with col2:
-            rejections = trading_stats.get('total_rejections', 0)
-            rejection_rate = (rejections / orders * 100) if orders > 0 else 0
-            st.metric("Rejection Rate", f"{rejection_rate:.1f}%", help="Percentage of orders that were rejected")
+            fill_rate = (executions / orders * 100) if orders > 0 else 0
+            st.metric("Fill Rate", f"{fill_rate:.1f}%")
         with col3:
-            latency_stats = trading_stats.get('latency_stats', {})
-            avg_latency = latency_stats.get('avg_ms', 0)
-            st.metric("Avg Latency", f"{avg_latency:.2f} ms", help="Average order-to-execution latency")
+            rejection_rate = (rejections / orders * 100) if orders > 0 else 0
+            st.metric("Rejection Rate", f"{rejection_rate:.1f}%")
         with col4:
-            connection_health = trading_stats.get('connection_health', {})
-            conn_health_score = connection_health.get('health_score', 100)
-            st.metric("Connection Health", f"{conn_health_score}/100", help="Overall connection stability score")
+            st.metric("Average Latency", f"{latency_stats.get('avg_ms', 0):.2f} ms")
+        with col5:
+            cancel_rate = (cancellations / orders * 100) if orders > 0 else 0
+            st.metric("Cancellation Rate", f"{cancel_rate:.1f}%")
+        with col6:
+            conn_health_score = trading_stats.get('connection_health', {}).get('health_score', 100)
+            st.metric("Connection Health", f"{conn_health_score}/100")
+        if latency_stats.get('count', 0) > 0:
+            st.write("**⏱️ Latency Analysis**")
+            col1, col2, col3 = st.columns(3)
+            high_latency_count = latency_stats.get('high_latency_count', 0)
+            total_latency_samples = latency_stats.get('count', 1)
+            high_latency_pct = (high_latency_count / total_latency_samples) * 100
+            with col1:
+                st.metric("High Latency Events", f"{high_latency_count}")
+            with col2:
+                st.metric("High Latency %", f"{high_latency_pct:.1f}%")
+            with col3:
+                st.metric("P99 Latency", f"{latency_stats.get('p99_ms', 0):.2f} ms")
+            avg_latency = latency_stats.get('avg_ms', 0)
+            threshold = 10
+            if avg_latency > threshold:
+                st.warning(f"⚠️ Average latency ({avg_latency:.2f}ms) exceeds threshold ({threshold}ms)")
+            else:
+                st.success(f"✅ Average latency ({avg_latency:.2f}ms) is acceptable")
+    protocol_dist = executive_summary['protocol_distribution']
+    if protocol_dist:
+        st.subheader("📡 Protocol Distribution")
+        fig = px.pie(
+            values=list(protocol_dist.values()),
+            names=list(protocol_dist.keys()),
+            hole=0.4,
+            title="Protocol Usage Breakdown",
+            color_discrete_sequence=px.colors.sequential.RdBu
+        )
+        fig.update_traces(
+            textinfo='percent+label',
+            textfont_size=14,
+            marker=dict(line=dict(color='#000000', width=1))
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
 def render_network_analysis(network_analysis: Dict[str, Any]):
     st.subheader("🌐 Network Analysis")
@@ -350,7 +312,7 @@ def render_network_analysis(network_analysis: Dict[str, Any]):
         col3.metric("Min Size", f"{payload_stats.get('min', 0)} bytes")
         col4.metric("Max Size", f"{payload_stats.get('max', 0)} bytes")
 
-def render_enhanced_recommendations(recommendations: List[Dict[str, str]]):
+def render_recommendations(recommendations: List[Dict[str, str]]):
     st.subheader("💡 System Recommendations")
     priority_groups = {}
     for rec in recommendations:
@@ -374,40 +336,51 @@ def render_enhanced_recommendations(recommendations: List[Dict[str, str]]):
                     st.write(f"**Recommendation:** {rec['recommendation']}")
                     st.write(f"**Action Required:** {rec['action']}")
 
-def render_trading_metrics_dashboard(trading_stats: Dict[str, Any]):
-    st.subheader("📊 Trading Metrics Dashboard")
+def render_llm_packet_analysis(packet_analyses: List[Dict], max_display: int = 50):
+    st.subheader("🧠 AI Packet Analysis")
+    analyzed_packets = [
+        analysis for analysis in packet_analyses 
+        if analysis.get('packet_analysis') and analysis['packet_analysis']
+    ]
+    if not analyzed_packets:
+        st.info("No packets were analyzed by AI (only trading-relevant packets are sent to LLM)")
+        return
+    display_count = min(len(analyzed_packets), max_display)
+    if len(analyzed_packets) > max_display:
+        st.warning(f"Showing first {max_display} of {len(analyzed_packets)} AI-analyzed packets")
     col1, col2, col3, col4 = st.columns(4)
-    orders = trading_stats.get('total_orders', 0)
-    executions = trading_stats.get('total_executions', 0)
-    rejections = trading_stats.get('total_rejections', 0)
-    cancellations = trading_stats.get('total_cancellations', 0)
-    with col1:
-        st.metric("Total Orders", f"{orders:,}")
-    with col2:
-        fill_rate = (executions / orders * 100) if orders > 0 else 0
-        st.metric("Fill Rate", f"{fill_rate:.1f}%")
-    with col3:
-        rejection_rate = (rejections / orders * 100) if orders > 0 else 0
-        st.metric("Rejection Rate", f"{rejection_rate:.1f}%")
-    with col4:
-        cancel_rate = (cancellations / orders * 100) if orders > 0 else 0
-        st.metric("Cancellation Rate", f"{cancel_rate:.1f}%")
-    latency_stats = trading_stats.get('latency_stats', {})
-    if latency_stats.get('count', 0) > 0:
-        st.write("**Latency Analysis**")
-        high_latency_count = latency_stats.get('high_latency_count', 0)
-        total_latency_samples = latency_stats.get('count', 1)
-        high_latency_pct = (high_latency_count / total_latency_samples) * 100
-        col1, col2, col3 = st.columns(3)
-        col1.metric("High Latency Events", f"{high_latency_count}")
-        col2.metric("High Latency %", f"{high_latency_pct:.1f}%")
-        col3.metric("P99 Latency", f"{latency_stats.get('p99_ms', 0):.2f} ms")
-        avg_latency = latency_stats.get('avg_ms', 0)
-        latency_threshold = 10
-        if avg_latency > latency_threshold:
-            st.warning(f"⚠️ Average latency ({avg_latency:.2f}ms) exceeds threshold ({latency_threshold}ms)")
-        else:
-            st.success(f"✅ Average latency ({avg_latency:.2f}ms) within acceptable range")
+    total_issues = sum(len(p.get('packet_analysis', {}).get('issues', [])) for p in analyzed_packets)
+    high_impact = sum(1 for p in analyzed_packets 
+                     if 'high' in p.get('packet_analysis', {}).get('performance_impact', '').lower())
+    col1.metric("AI Analyzed Packets", len(analyzed_packets))
+    col2.metric("Total Issues Found", total_issues)
+    col3.metric("High Impact Packets", high_impact)
+    col4.metric("Analysis Coverage", f"{len(analyzed_packets)}/{len(packet_analyses)} packets")
+    for i, analysis in enumerate(analyzed_packets[:display_count]):
+        packet_info = analysis['packet_info']
+        packet_analysis = analysis['packet_analysis']
+        with st.expander(f"Packet {i+1}: {packet_info['protocol']} - {packet_info['src_ip']}:{packet_info['src_port']} → {packet_info['dst_ip']}:{packet_info['dst_port']}"):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write("**Packet Details**")
+                st.write(f"• **Type:** {packet_analysis.get('packet_type', 'Unknown')}")
+                st.write(f"• **Size:** {packet_info['length']} bytes")
+                st.write(f"• **Trading Relevance:** {packet_analysis.get('trading_relevance', 'Unknown')}")
+                st.write(f"• **Performance Impact:** {packet_analysis.get('performance_impact', 'Unknown')}")
+            with col2:
+                issues = packet_analysis.get('issues', [])
+                if issues:
+                    st.write("**Issues Detected:**")
+                    for issue in issues:
+                        st.write(f"• ⚠️ {issue}")
+                else:
+                    st.write("✅ **No issues detected**")
+                
+                recommendations = packet_analysis.get('recommendations', [])
+                if recommendations:
+                    st.write("**Recommendations:**")
+                    for rec in recommendations:
+                        st.write(f"• 💡 {rec}")
 
 def render_detailed_file_stats(file_stats: Dict[str, Any]):
     st.subheader("📁 File Statistics")
@@ -454,33 +427,70 @@ def render_ai_chat_interface(analyzer, results):
 
 def render_ai_session_analysis(llm_session_analysis):
     st.subheader("🧠 AI-Powered Session Analysis")
-    if "error" in llm_session_analysis:
-        st.error(f"AI Analysis Unavailable: {llm_session_analysis['error']}")
+    if not llm_session_analysis:
+        st.error(f"An error was encountered while generating the results. Please try again.")
         return
+    st.write(llm_session_analysis)
     if isinstance(llm_session_analysis, dict):
-        col1, col2 = st.columns(2)
-        with col1:
-            if 'session_health' in llm_session_analysis:
-                st.write("**Session Health Assessment**")
-                st.info(llm_session_analysis.get('session_health', 'No assessment available'))
-            if 'trading_performance' in llm_session_analysis:
-                st.write("**Trading Performance Analysis**")
-                st.info(llm_session_analysis.get('trading_performance', 'No analysis available'))
-        with col2:
-            if 'risk_assessment' in llm_session_analysis:
-                st.write("**Risk Assessment**")
-                st.warning(llm_session_analysis.get('risk_assessment', 'No assessment available'))
-            if 'compliance_notes' in llm_session_analysis:
-                st.write("**Compliance Notes**")
-                st.info(llm_session_analysis.get('compliance_notes', 'No notes available'))
+        if 'session_health' in llm_session_analysis:
+            st.write("**Session Health**")
+            st.info(llm_session_analysis.get('session_health', 'No assessment available'))
+        if 'trading_performance' in llm_session_analysis:
+            st.write("**Trading Performance**")
+            st.info(llm_session_analysis.get('trading_performance', 'No analysis available'))
+        if 'risk_assessment' in llm_session_analysis:
+            st.write("**Risk Assessment**")
+            st.warning(llm_session_analysis.get('risk_assessment', 'No assessment available'))
+        if 'compliance_notes' in llm_session_analysis:
+            st.write("**Compliance Notes**")
+            st.info(llm_session_analysis.get('compliance_notes', 'No notes available'))
         if 'recommendations' in llm_session_analysis:
             st.write("**AI Optimization Recommendations**")
             st.success(llm_session_analysis.get('recommendations', 'No recommendations available'))
 
+def render_ml_anomaly_analysis(anomalies, packet_analyses):
+    st.subheader("🤖 Machine Learning Anomaly Detection")
+    if not anomalies:
+        st.info("No anomalies detected or insufficient data for ML analysis")
+        return
+    total_anomalies = sum(anom.get('anomaly_count', 0) for anom in anomalies.values())
+    st.metric("Total Anomalies Detected", total_anomalies)
+    col1, col2 = st.columns(2)
+    with col1:
+        anomaly_types = []
+        anomaly_counts = []
+        for anom_type, anom_data in anomalies.items():
+            anomaly_types.append(anom_type.replace('_features', '').title())
+            anomaly_counts.append(anom_data.get('anomaly_count', 0))
+        if anomaly_counts:
+            fig = px.bar(
+                x=anomaly_types,
+                y=anomaly_counts,
+                title="Anomalies by Type",
+                color=anomaly_counts,
+                color_continuous_scale='Reds'
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    with col2:
+        severity_data = []
+        for anom_type, anom_data in anomalies.items():
+            scores = anom_data.get('anomaly_scores', [])
+            for score in scores:
+                severity = 'High' if score < -0.5 else 'Medium' if score < -0.2 else 'Low'
+                severity_data.append(severity)
+        if severity_data:
+            severity_counts = pd.Series(severity_data).value_counts()
+            fig = px.pie(
+                values=severity_counts.values,
+                names=severity_counts.index,
+                title="Anomaly Severity Distribution"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
 def main():
     st.set_page_config(
-        page_title="PCAP Analysis Tool",
-        page_icon="📊",
+        page_title="Capture the Lag",
+        page_icon="🚩",
         layout="wide"
     )
     if 'analysis_running' not in st.session_state:
@@ -491,7 +501,7 @@ def main():
     analyzer = StreamlitPCAPAnalyzer()
     analysis_mode = st.sidebar.radio(
         "Analysis Mode",
-        ["Single File Analysis", "Batch File Analysis", "Directory Analysis"]
+        ["Single File Analysis", "Batch File Analysis"]
     )
     if analysis_mode == "Single File Analysis":
         uploaded_file = st.sidebar.file_uploader(
@@ -512,28 +522,18 @@ def main():
                         "📈 Trading Analysis", 
                         "📦 Packet Details", 
                         "💡 Recommendations",
-                        "📊 Executive Summary",
                         "🧠 AI Analysis",
                         "🤖 AI Chat" 
                     ])
                     with tabs[0]:
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            render_detailed_file_stats(results['file_stats'])
-                        with col2:
-                            render_executive_summary(results['executive_summary'], results['trading_stats'])
-                        protocol_dist = results['executive_summary']['protocol_distribution']
-                        if protocol_dist:
-                            fig = px.pie(
-                                values=list(protocol_dist.values()),
-                                names=list(protocol_dist.keys()),
-                                title="📡 Protocol Distribution"
-                            )
-                            st.plotly_chart(fig, use_container_width=True)
-                        if results['trading_stats'].get('total_orders', 0) > 0:
-                            render_trading_metrics_dashboard(results['trading_stats'])
+                        render_executive_summary(results['executive_summary'], results['trading_stats'])
+                        render_detailed_file_stats(results['file_stats'])
                     with tabs[1]:
                         render_network_analysis(results['network_analysis'])
+                        if 'anomalies' in results:
+                            render_ml_anomaly_analysis(results['anomalies'], results['packet_analyses'])
+                        else:
+                            st.info("ML anomaly detection not available - requires sufficient data points")
                     with tabs[2]:
                         st.subheader("📈 Trading Performance Analysis")
                         trading_stats = results['trading_stats']
@@ -672,48 +672,16 @@ def main():
                         else:
                             st.info("No packets match the selected filters.")
                     with tabs[4]:
-                        render_enhanced_recommendations(results['recommendations'])
+                        render_recommendations(results['recommendations'])
+                        
                     with tabs[5]:
-                        st.subheader("📊 Executive Dashboard")
-                        exec_summary = results['executive_summary']
-                        health_score = exec_summary['health_score']
-                        fig = go.Figure(go.Indicator(
-                            mode = "gauge+number+delta",
-                            value = health_score,
-                            domain = {'x': [0, 1], 'y': [0, 1]},
-                            title = {'text': "System Health Score"},
-                            delta = {'reference': 80},
-                            gauge = {
-                                'axis': {'range': [None, 100]},
-                                'bar': {'color': "darkblue"},
-                                'steps': [
-                                    {'range': [0, 50], 'color': "lightgray"},
-                                    {'range': [50, 80], 'color': "gray"}
-                                ],
-                                'threshold': {
-                                    'line': {'color': "red", 'width': 4},
-                                    'thickness': 0.75,
-                                    'value': 90
-                                }
-                            }
-                        ))
-                        st.plotly_chart(fig, use_container_width=True)
-                        st.write("**Analysis Summary**")
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Total Packets", f"{exec_summary['total_packets']:,}")
-                            st.metric("Trading Packets", f"{exec_summary['trading_packets']:,}")
-                        with col2:
-                            st.metric("Total Issues", exec_summary['total_issues'])
-                            st.metric("Critical Issues", exec_summary['critical_issues'])
-                        with col3:
-                            st.metric("Trading %", f"{exec_summary['trading_percentage']:.1f}%")
-                    with tabs[6]:
+                        render_llm_packet_analysis(results['packet_analyses'])
+                        st.markdown("---")
                         if 'llm_session_analysis' in results:
                             render_ai_session_analysis(results['llm_session_analysis'])
                         else:
                             st.info("AI session analysis not available for this result set.")
-                    with tabs[7]:
+                    with tabs[6]:
                         render_ai_chat_interface(analyzer, results)
     elif analysis_mode == "Batch File Analysis":
         st.subheader("📚 Batch File Analysis")
@@ -758,49 +726,9 @@ def main():
                         st.error("❌ Failed Analyses")
                         for failure in failed_analyses:
                             st.write(f"**{failure['filename']}**: {failure['error']}")
-    elif analysis_mode == "Directory Analysis":
-        st.subheader("📂 Directory Analysis")
-        directory_path = st.text_input(
-            "Enter Directory Path",
-            help="Full path to directory containing PCAP files"
-        )
-        use_pyshark = st.checkbox(
-            "Use PyShark for large files",
-            help="Enable PyShark for better handling of large PCAP files"
-        )
-        if directory_path and st.button("🔍 Analyze Directory"):
-            with st.spinner("Analyzing directory..."):
-                results = analyzer.analyze_directory_upload(directory_path)
-                if "error" in results:
-                    st.error(f"❌ {results['error']}")
-                else:
-                    st.success(f"✅ Found {len(results['pcap_files_found'])} PCAP files")
-                    successful = [r for r in results['batch_results'] if r['success']]
-                    failed = [r for r in results['batch_results'] if not r['success']]
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Total Files", len(results['pcap_files_found']))
-                    col2.metric("Successful", len(successful))
-                    col3.metric("Failed", len(failed))
-                    if successful:
-                        st.subheader("📊 Analysis Results")
-                        results_df = pd.DataFrame([
-                            {
-                                'Filename': r['filename'],
-                                'Packets': r['total_packets'],
-                                'Health Score': f"{r['health_score']}/100",
-                                'Issues': r['total_issues'],
-                                'Trading Packets': r['trading_packets']
-                            }
-                            for r in successful
-                        ])
-                        st.dataframe(results_df, hide_index=True, use_container_width=True)
-                    if failed:
-                        st.error("❌ Failed Analyses")
-                        for failure in failed:
-                            st.write(f"**{failure['filename']}**: {failure['error']}")
     with st.sidebar:
-        st.header("📄 Report Generation")
         if 'results' in locals() and 'error' not in results:
+            st.header("📄 Report Generation")
             report_format = st.selectbox(
                 "Report Format",
                 ["HTML", "Markdown", "JSON"],
@@ -823,7 +751,6 @@ def main():
                         )
                         with open(report_path, 'r', encoding='utf-8') as f:
                             report_content = f.read()
-                            
                         st.download_button(
                             f"📥 Download Comprehensive Report ({report_format})",
                             report_content,
@@ -844,7 +771,7 @@ def main():
                             file_name=f"summary_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
                             mime="text/markdown"
                         )
-                    st.success("✅ Reports generated successfully!")
+                    st.success("✅ Reports were generated successfully.")
 
 if __name__ == "__main__":
     main()

@@ -1,14 +1,29 @@
-import json
 import yaml
 import logging
 import requests
-from typing import Dict, Any
+from ollama import chat
+from pydantic import BaseModel
+from typing import Dict, Any, List
 from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 from azure.ai.inference import ChatCompletionsClient
 from azure.core.credentials import AzureKeyCredential
 from azure.ai.inference.models import SystemMessage, UserMessage
 
+class PacketAnalysis(BaseModel):
+    packet_type: str
+    trading_relevance: str
+    issues: List[str]
+    performance_impact: str
+    recommendations: List[str]
+
+class TradingAnalysis(BaseModel):
+    session_health: str
+    trading_performance: str
+    risk_assessment: List[str]
+    recommendations: List[str]
+    compliance_notes: str
+    
 class LLMClient:
     def __init__(self, config_path: str = "config/config.yaml"):
         with open(config_path, 'r') as file:
@@ -48,20 +63,20 @@ class LLMClient:
     def analyze_packet(self, packet_info: Dict[str, Any]) -> Dict[str, Any]:
         prompt = self._create_packet_analysis_prompt(packet_info)
         if self.provider == "ollama":
-            return self._query_ollama(prompt)
+            return self._query_ollama(prompt, model_cls=PacketAnalysis)
         elif self.provider == "azure":
-            return self._query_azure(prompt)
+            return self._query_azure(prompt, model_cls=PacketAnalysis)
         else:
-            raise ValueError(f"Unsupported LLM provider: {self.provider}")
+            raise ValueError(f"Unsupported LLM Provider: {self.provider}")
     
     def analyze_trading_session(self, session_data: Dict[str, Any]) -> Dict[str, Any]:
         prompt = self._create_trading_analysis_prompt(session_data)
         if self.provider == "ollama":
-            return self._query_ollama(prompt)
+            return self._query_ollama(prompt, model_cls=TradingAnalysis)
         elif self.provider == "azure":
-            return self._query_azure(prompt)
+            return self._query_azure(prompt, model_cls=TradingAnalysis)
         else:
-            raise ValueError(f"Unsupported LLM provider: {self.provider}")
+            raise ValueError(f"Unsupported LLM Provider: {self.provider}")
     
     def _create_packet_analysis_prompt(self, packet_info: Dict[str, Any]) -> str:
         return f"""
@@ -77,7 +92,7 @@ class LLMClient:
             - TCP Flags: {packet_info.get('tcp_flags', 'N/A')}
             - Sequence Number: {packet_info.get('seq_num', 'N/A')}
             - Acknowledgment Number: {packet_info.get('ack_num', 'N/A')}
-            Payload Preview: {packet_info.get('payload_preview', 'No payload')}
+            Payload: {packet_info.get('payload', 'No payload')}
 
             Please analyze this packet and provide:
             1. **Packet Type**: What kind of packet this is (TCP handshake, data transfer, etc.)
@@ -86,7 +101,7 @@ class LLMClient:
             4. **Performance Impact**: Impact on trading latency or reliability
             5. **Recommended Actions**: Specific troubleshooting steps if issues are found
 
-            Format your response as JSON with these fields: packet_type, trading_relevance, issues, performance_impact, recommendations.
+            Return ONLY valid JSON with these fields: packet_type, trading_relevance, issues, performance_impact, recommendations.
             """
 
     def _create_trading_analysis_prompt(self, session_data: Dict[str, Any]) -> str:
@@ -116,47 +131,35 @@ class LLMClient:
             4. **Optimization Recommendations**: Specific improvements suggested
             5. **Compliance Notes**: Any regulatory or risk management concerns
 
-            Format as JSON with these fields: session_health, trading_performance, risk_assessment, recommendations, compliance_notes.
+            Return ONLY valid JSON with these fields: session_health, trading_performance, risk_assessment, recommendations, compliance_notes.
             """
 
-    def _query_ollama(self, prompt: str) -> Dict[str, Any]:
+    def _query_ollama(self, prompt: str,  model_cls: type[BaseModel] = None):
         try:
-            payload = {
+            kwargs = {
+                "messages": [{"role": "user", "content": prompt}],
                 "model": self.model,
-                "prompt": prompt,
-                "stream": False,
                 "options": {
                     "temperature": self.temperature,
                     "num_predict": self.max_tokens
                 }
             }
-            response = self.session.post(
-                f"{self.base_url}/api/generate",
-                json=payload,
-                timeout=self.timeout
-            )
-            response.raise_for_status()
-            result = response.json()
-            response_text = result.get('response', '')
-            try:
-                return json.loads(response_text)
-            except json.JSONDecodeError:
-                return {
-                    "raw_response": response_text,
-                    "analysis": self._parse_text_response(response_text)
-                }
-        except requests.exceptions.Timeout:
-            return {"error": "LLM request timed out", "issues": ["Analysis incomplete due to timeout"]}
-        except requests.exceptions.RequestException as e:
-            return {"error": f"LLM request failed: {str(e)}", "issues": ["Analysis failed"]}
+            if model_cls:
+                kwargs["format"] = model_cls.model_json_schema()
+            response = chat(**kwargs)
+            content = response['message']['content']
+            if model_cls:
+                try:
+                    return model_cls.model_validate_json(content).model_dump()
+                except Exception as e:
+                    self.logger.error(f"Ollama Validation Error: {str(e)}")
+                    return None
+            return content
         except Exception as e:
-            self.logger.error(f"Error querying Ollama: {e}")
-            return {
-                "error": str(e),
-                "analysis": "Failed to analyze packet due to an LLM error..."
-            }
+            self.logger.error(f"Ollama Error: {str(e)}")
+            return None
     
-    def _query_azure(self, prompt: str) -> Dict[str, Any]:
+    def _query_azure(self, prompt: str, model_cls: type[BaseModel] = None):
         try:
             azure_config = self.config['llm']['azure']
             response = self.azure_client.complete(
@@ -168,45 +171,17 @@ class LLMClient:
                 temperature=azure_config['temperature'],
                 max_tokens=azure_config['max_tokens']
             )
-            response_text = response.choices[0].message.content
-            try:
-                return json.loads(response_text)
-            except json.JSONDecodeError:
-                return {
-                    "raw_response": response_text,
-                    "analysis": self._parse_text_response(response_text)
-                }
+            content = response.choices[0].message.content
+            if model_cls:
+                try:
+                    return model_cls.model_validate_json(content).model_dump()
+                except Exception as e:
+                    self.logger.error(f"Azure Validation Error: {str(e)}")
+                    return None
+            return content
         except Exception as e:
-            self.logger.error(f"Error querying Azure AI: {e}")
-            return {
-                "error": str(e),
-                "analysis": "Failed to analyze packet due to an LLM error..."
-            }
-    
-    def _parse_text_response(self, text: str) -> Dict[str, str]:
-        sections = {
-            "packet_type": "",
-            "trading_relevance": "",
-            "issues": "",
-            "performance_impact": "",
-            "recommendations": ""
-        }
-        current_section = None
-        lines = text.split('\n')
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            for section in sections.keys():
-                if section.replace('_', ' ').lower() in line.lower():
-                    current_section = section
-                    break
-            if current_section and line:
-                if sections[current_section]:
-                    sections[current_section] += " " + line
-                else:
-                    sections[current_section] = line
-        return sections
+            self.logger.error(f"Azure Error: {str(e)}")
+            return None
     
     def chat_query(self, message: str, context: str = "") -> str:
         prompt = f"""
@@ -218,10 +193,6 @@ class LLMClient:
         """
         if self.provider == "ollama":
             result = self._query_ollama(prompt)
-            if isinstance(result, dict) and 'raw_response' in result:
-                return result['raw_response']
-            elif isinstance(result, dict) and 'error' in result:
-                return f"Error: {result['error']}"
-            else:
-                return str(result)
-        return "LLM Unavailable"
+        elif self.provider == "azure":
+            result = self._query_azure(prompt)
+        return str(result) if result else "The LLM is currently unavailable. Please try again."
