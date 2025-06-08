@@ -18,7 +18,6 @@ class TradingAnalyzer:
                     }
                 }
             }
-        
         self.logger = logging.getLogger(__name__)
         self.fix_ports = set(self.config['analysis']['trading']['fix_ports'])
         self.itch_ports = set(self.config['analysis']['trading']['itch_ports'])

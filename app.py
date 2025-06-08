@@ -164,8 +164,8 @@ class StreamlitPCAPAnalyzer:
             'batch_report_path': batch_report_path
         }
 
-def render_executive_summary(executive_summary: Dict[str, Any], trading_stats: Dict[str, Any] = None):
-    st.subheader("📊 Executive Summary")
+def render_executive_summary(executive_summary: Dict[str, Any], file_stats: Dict[str, Any],  trading_stats: Dict[str, Any] = None):
+    st.header("📊 Executive Summary")
     health_score = executive_summary['health_score']
     fig = go.Figure(go.Indicator(
         mode="gauge+number+delta",
@@ -177,8 +177,9 @@ def render_executive_summary(executive_summary: Dict[str, Any], trading_stats: D
             'axis': {'range': [None, 100]},
             'bar': {'color': "blue"},
             'steps': [
-                {'range': [0, 50], 'color': "lightgray"},
-                {'range': [50, 80], 'color': "gray"}
+                {'range': [0, 50], 'color': "#ff4444"},
+                {'range': [50, 80], 'color': "#ffaa00"},
+                {'range': [80, 100], 'color': "#44ff44"}
             ],
             'threshold': {
                 'line': {'color': "red", 'width': 4},
@@ -188,57 +189,33 @@ def render_executive_summary(executive_summary: Dict[str, Any], trading_stats: D
         }
     ))
     st.plotly_chart(fig, use_container_width=True)
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Packets", f"{executive_summary['total_packets']:,}", help="Total number of packets analyzed")
-    with col2:
-        st.metric("Trading Traffic", f"{executive_summary['trading_percentage']:.1f}%", help="Percentage of packets containing trading data")
-    with col3:
-        st.metric("Total Issues", f"{executive_summary['total_issues']}", help="Total number of issues detected")
-    with col4:
-        st.metric("Critical Issues", f"{executive_summary['critical_issues']}", help="Total number of issues classified as critical")
+    metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
+    with metrics_col1:
+        st.metric("📦 Total Packets", f"{executive_summary['total_packets']:,}")
+        st.metric("⚠️ Total Issues", f"{executive_summary['total_issues']}")
+    with metrics_col2:
+        st.metric("📈 Trading Packets", f"{executive_summary['trading_percentage']:.1f}%")
+        st.metric("🔴 Critical Issues", f"{executive_summary['critical_issues']}")
+    with metrics_col3:
+        st.metric("📁 File Size", f"{file_stats['file_size'] / (1024*1024):.1f} MB")
+        st.metric("⏱️ Duration", f"{file_stats['duration_seconds']:.1f}s")
     if trading_stats and trading_stats.get('total_orders', 0) > 0:
-        st.write("**📈 Trading Performance Metrics**")
-        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        st.subheader("📈 Trading Performance Summary")
+        perf_col1, perf_col2, perf_col3, perf_col4 = st.columns(4)
         orders = trading_stats.get('total_orders', 0)
         executions = trading_stats.get('total_executions', 0)
-        rejections = trading_stats.get('total_rejections', 0)
-        cancellations = trading_stats.get('total_cancellations', 0)
+        fill_rate = (executions / orders * 100) if orders > 0 else 0
         latency_stats = trading_stats.get('latency_stats', {})
-        with col1:
-            st.metric("Total Orders", f"{orders:,}")
-        with col2:
-            fill_rate = (executions / orders * 100) if orders > 0 else 0
-            st.metric("Fill Rate", f"{fill_rate:.1f}%")
-        with col3:
-            rejection_rate = (rejections / orders * 100) if orders > 0 else 0
-            st.metric("Rejection Rate", f"{rejection_rate:.1f}%")
-        with col4:
-            st.metric("Average Latency", f"{latency_stats.get('avg_ms', 0):.2f} ms")
-        with col5:
-            cancel_rate = (cancellations / orders * 100) if orders > 0 else 0
-            st.metric("Cancellation Rate", f"{cancel_rate:.1f}%")
-        with col6:
-            conn_health_score = trading_stats.get('connection_health', {}).get('health_score', 100)
-            st.metric("Connection Health", f"{conn_health_score}/100")
-        if latency_stats.get('count', 0) > 0:
-            st.write("**⏱️ Latency Analysis**")
-            col1, col2, col3 = st.columns(3)
-            high_latency_count = latency_stats.get('high_latency_count', 0)
-            total_latency_samples = latency_stats.get('count', 1)
-            high_latency_pct = (high_latency_count / total_latency_samples) * 100
-            with col1:
-                st.metric("High Latency Events", f"{high_latency_count}")
-            with col2:
-                st.metric("High Latency %", f"{high_latency_pct:.1f}%")
-            with col3:
-                st.metric("P99 Latency", f"{latency_stats.get('p99_ms', 0):.2f} ms")
-            avg_latency = latency_stats.get('avg_ms', 0)
-            threshold = 10
-            if avg_latency > threshold:
-                st.warning(f"⚠️ Average latency ({avg_latency:.2f}ms) exceeds threshold ({threshold}ms)")
-            else:
-                st.success(f"✅ Average latency ({avg_latency:.2f}ms) is acceptable")
+        with perf_col1:
+            st.metric("🎯 Fill Rate", f"{fill_rate:.1f}%")
+        with perf_col2:
+            st.metric("⚡️ Average Latency", f"{latency_stats.get('avg_ms', 0):.2f}ms")
+        with perf_col3:
+            rejection_rate = (trading_stats.get('total_rejections', 0) / orders * 100) if orders > 0 else 0
+            st.metric("❌ Rejection Rate", f"{rejection_rate:.1f}%")
+        with perf_col4:
+            conn_health = trading_stats.get('connection_health', {}).get('health_score', 100)
+            st.metric("🔗 Connection Health", f"{conn_health}/100")
     protocol_dist = executive_summary['protocol_distribution']
     if protocol_dist:
         st.subheader("📡 Protocol Distribution")
@@ -246,74 +223,266 @@ def render_executive_summary(executive_summary: Dict[str, Any], trading_stats: D
             values=list(protocol_dist.values()),
             names=list(protocol_dist.keys()),
             hole=0.4,
-            title="Protocol Usage Breakdown",
             color_discrete_sequence=px.colors.sequential.RdBu
         )
-        fig.update_traces(
-            textinfo='percent+label',
-            textfont_size=14,
-            marker=dict(line=dict(color='#000000', width=1))
-        )
+        fig.update_traces(textinfo='percent+label', textfont_size=12)
         st.plotly_chart(fig, use_container_width=True)
 
-def render_network_analysis(network_analysis: Dict[str, Any]):
-    st.subheader("🌐 Network Analysis")
-    tcp_stats = network_analysis.get('tcp_analysis', {})
-    if tcp_stats.get('total', 0) > 0:
-        st.write("**TCP Connection Analysis**")
-        col1, col2 = st.columns(2)
-        with col1:
-            tcp_metrics = {
-                'Total TCP': tcp_stats.get('total', 0),
-                'SYN (New Connections)': tcp_stats.get('syn', 0),
-                'FIN (Clean Closes)': tcp_stats.get('fin', 0),
-                'RST (Forced Closes)': tcp_stats.get('rst', 0)
+def render_trading_analytics(trading_stats: Dict[str, Any]):
+    st.header("📈 Trading Analysis")
+    if not trading_stats or trading_stats.get('total_orders', 0) == 0:
+        st.info("No trading activity detected in this capture")
+        return
+    st.subheader("🧾 Order Flow Analysis")
+    orders = trading_stats.get('total_orders', 0)
+    executions = trading_stats.get('total_executions', 0)
+    rejections = trading_stats.get('total_rejections', 0)
+    cancellations = trading_stats.get('total_cancellations', 0)
+    flow_col1, flow_col2 = st.columns(2)
+    with flow_col1:
+        order_flow_data = {
+            'Type': ['Orders', 'Executions', 'Rejections', 'Cancellations'],
+            'Count': [orders, executions, rejections, cancellations]
+        }
+        fig = px.bar(
+            x=order_flow_data['Type'],
+            y=order_flow_data['Count'],
+            title="Order Flow Distribution",
+            color=order_flow_data['Count'],
+            color_continuous_scale='viridis'
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    with flow_col2:
+        if orders > 0:
+            fill_rate = (executions / orders) * 100
+            rejection_rate = (rejections / orders) * 100
+            cancel_rate = (cancellations / orders) * 100
+            rates_data = {
+                'Metric': ['Fill Rate', 'Rejection Rate', 'Cancellation Rate'],
+                'Percentage': [fill_rate, rejection_rate, cancel_rate]
             }
             fig = px.bar(
-                x=list(tcp_metrics.keys()),
-                y=list(tcp_metrics.values()),
+                x=rates_data['Metric'],
+                y=rates_data['Percentage'],
+                title="Order Success Rates (%)",
+                color=rates_data['Percentage'],
+                color_continuous_scale='RdYlGn'
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    latency_stats = trading_stats.get('latency_stats', {})
+    if latency_stats and latency_stats.get('count', 0) > 0:
+        st.subheader("⚡️ Latency Performance")
+        lat_col1, lat_col2 = st.columns(2)
+        with lat_col1:
+            latency_metrics = st.columns(4)
+            with latency_metrics[0]:
+                st.metric("Average", f"{latency_stats.get('avg_ms', 0):.2f}ms")
+            with latency_metrics[1]:
+                st.metric("P95", f"{latency_stats.get('p95_ms', 0):.2f}ms")
+            with latency_metrics[2]:
+                st.metric("P99", f"{latency_stats.get('p99_ms', 0):.2f}ms")
+            with latency_metrics[3]:
+                st.metric("Max", f"{latency_stats.get('max_ms', 0):.2f}ms")
+        with lat_col2:
+            latency_data = {
+                'Metric': ['Min', 'Avg', 'P95', 'P99', 'Max'],
+                'Latency (ms)': [
+                    latency_stats.get('min_ms', 0),
+                    latency_stats.get('avg_ms', 0),
+                    latency_stats.get('p95_ms', 0),
+                    latency_stats.get('p99_ms', 0),
+                    latency_stats.get('max_ms', 0)
+                ]
+            }
+            fig = px.bar(
+                x=latency_data['Metric'],
+                y=latency_data['Latency (ms)'],
+                title="Latency Distribution",
+                color=latency_data['Latency (ms)'],
+                color_continuous_scale='RdYlGn_r'
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        avg_latency = latency_stats.get('avg_ms', 0)
+        if avg_latency > 10:
+            st.error(f"🚨 High Latency Detected: {avg_latency:.2f}ms (threshold: 10ms)")
+        elif avg_latency > 5:
+            st.warning(f"⚠️ Elevated Latency: {avg_latency:.2f}ms")
+        else:
+            st.success(f"✅ Latency Within Acceptable Range: {avg_latency:.2f}ms")
+    rejection_analysis = trading_stats.get('rejection_analysis', {})
+    if rejection_analysis.get('count', 0) > 0:
+        st.subheader("❌ Rejection Analysis")
+        rej_col1, rej_col2 = st.columns(2)
+        with rej_col1:
+            st.metric("Total Rejections", rejection_analysis['count'])
+            st.metric("Rejection Rate", f"{rejection_analysis['rejection_rate']:.2f}%")
+        with rej_col2:
+            reasons = rejection_analysis.get('reasons', {})
+            if reasons:
+                fig = px.pie(
+                    values=list(reasons.values()),
+                    names=list(reasons.keys()),
+                    title="Rejection Reasons"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+def render_network_analysis(network_analysis: Dict[str, Any], anomalies: Dict[str, Any] = {}, packet_analyses: Dict[str, Any] = {}):
+    st.header("🌐 Network Analysis")
+    tcp_stats = network_analysis.get('tcp_analysis', {})
+    if tcp_stats.get('total', 0) > 0:
+        st.subheader("🔗 TCP Connection Analysis")
+        tcp_col1, tcp_col2 = st.columns(2)
+        with tcp_col1:
+            tcp_metrics = {
+                'SYN (New)': tcp_stats.get('syn', 0),
+                'FIN (Close)': tcp_stats.get('fin', 0),
+                'RST (Reset)': tcp_stats.get('rst', 0),
+                'Other': tcp_stats.get('total', 0) - tcp_stats.get('syn', 0) - tcp_stats.get('fin', 0) - tcp_stats.get('rst', 0)
+            }
+            fig = px.pie(
+                values=list(tcp_metrics.values()),
+                names=list(tcp_metrics.keys()),
                 title="TCP Flags Distribution"
             )
             st.plotly_chart(fig, use_container_width=True)
-        with col2:
+        with tcp_col2:
             total_tcp = tcp_stats.get('total', 1)
             rst_rate = (tcp_stats.get('rst', 0) / total_tcp) * 100
             fin_rate = (tcp_stats.get('fin', 0) / total_tcp) * 100
-            st.metric("RST Rate", f"{rst_rate:.1f}%", help="Percentage of forced connection closes")
-            st.metric("Clean Close Rate", f"{fin_rate:.1f}%", help="Percentage of clean connection closes")
+            
+            conn_col1, conn_col2 = st.columns(2)
+            with conn_col1:
+                st.metric("RST Rate", f"{rst_rate:.1f}%", help="Forced connection closes")
+            with conn_col2:
+                st.metric("Clean Close Rate", f"{fin_rate:.1f}%", help="Normal connection closes")
     top_ips = network_analysis.get('top_ip_pairs', {})
-    if top_ips:
-        st.write("**Top Communication Pairs**")
-        ip_df = pd.DataFrame([
-            {'IP Pair': pair, 'Packet Count': count}
-            for pair, count in list(top_ips.items())[:10]
-        ])
-        st.dataframe(ip_df, hide_index=True)
     top_ports = network_analysis.get('top_ports', {})
-    if top_ports:
-        st.write("**Port Usage Distribution**")
-        port_df = pd.DataFrame([
-            {'Port': port, 'Usage Count': count}
-            for port, count in list(top_ports.items())[:10]
-        ])
-        fig = px.pie(
-            port_df,
-            values='Usage Count',
-            names='Port',
-            title="Top 10 Ports by Usage"
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    if top_ips or top_ports:
+        st.subheader("🚦 Traffic Analysis")
+        st.markdown("<br>", unsafe_allow_html=True) 
+        traffic_col1, traffic_col2 = st.columns(2)
+        with traffic_col1:
+            if top_ips:
+                st.write("**Top Communication Pairs**")
+                ip_data = list(top_ips.items())[:8]
+                fig = px.bar(
+                    x=[count for _, count in ip_data],
+                    y=[pair for pair, _ in ip_data],
+                    orientation='h',
+                    title="Most Active IP Pairs"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+        with traffic_col2:
+            if top_ports:
+                st.write("**Port Usage Distribution**")
+                port_data = list(top_ports.items())[:8]
+                fig = px.bar(
+                    x=[port for port, _ in port_data],
+                    y=[count for _, count in port_data],
+                    title="Most Used Ports"
+                )
+                st.plotly_chart(fig, use_container_width=True)
     payload_stats = network_analysis.get('payload_statistics', {})
     if payload_stats:
-        st.write("**Payload Size Analysis**")
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Average Size", f"{payload_stats.get('avg', 0):.1f} bytes")
-        col2.metric("Median Size", f"{payload_stats.get('median', 0)} bytes")
-        col3.metric("Min Size", f"{payload_stats.get('min', 0)} bytes")
-        col4.metric("Max Size", f"{payload_stats.get('max', 0)} bytes")
+        st.subheader("🗳️ Payload Analysis")
+        payload_col1, payload_col2, payload_col3, payload_col4 = st.columns(4)
+        payload_col1.metric("Avg Size", f"{payload_stats.get('avg', 0):.1f} bytes")
+        payload_col2.metric("Median", f"{payload_stats.get('median', 0)} bytes")
+        payload_col3.metric("Min", f"{payload_stats.get('min', 0)} bytes")
+        payload_col4.metric("Max", f"{payload_stats.get('max', 0)} bytes")
+    if 'anomalies' in anomalies:
+        st.subheader("🤖 Anomaly Detection")
+        render_ml_anomaly_analysis(anomalies, packet_analyses)
+
+def render_packet_analysis(results: Dict[str, Any]):
+    st.header("📦 Packet Analysis")
+    filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+    with filter_col1:
+        show_trading_only = st.checkbox("Trading Packets Only", key="explorer_trading")
+    with filter_col2:
+        show_issues_only = st.checkbox("Issues Only", key="explorer_issues")
+    with filter_col3:
+        protocol_filter = st.selectbox("Protocol", ["All"] + list(set(p['packet_info']['protocol'] for p in results['packet_analyses'])))
+    with filter_col4:
+        max_packets = st.number_input("Max Display", min_value=10, max_value=1000, value=100, key="explorer_max")
+    filtered_packets = []
+    for i, analysis in enumerate(results['packet_analyses'][:max_packets]):
+        packet_info = analysis['packet_info']
+        trading_analysis = analysis.get('trading_analysis', {})
+        packet_analysis = analysis.get('packet_analysis', {})
+        is_trading = trading_analysis.get('is_trading', False)
+        issues_count = len(packet_analysis.get('issues', []))
+        if show_trading_only and not is_trading:
+            continue
+        if show_issues_only and issues_count == 0:
+            continue
+        if protocol_filter != "All" and packet_info['protocol'] != protocol_filter:
+            continue
+        filtered_packets.append({
+            'Index': i + 1,
+            'Time': datetime.fromtimestamp(packet_info['timestamp']) if packet_info['timestamp'] else 'N/A',
+            'Protocol': packet_info['protocol'],
+            'Source': f"{packet_info['src_ip']}:{packet_info['src_port']}",
+            'Destination': f"{packet_info['dst_ip']}:{packet_info['dst_port']}",
+            'Length': packet_info['length'],
+            'Trading': '✅' if is_trading else '❎',
+            'Issues': issues_count,
+            'Type': packet_analysis.get('packet_type', 'Unknown'),
+            'Impact': packet_analysis.get('performance_impact', 'Low')
+        })
+    if filtered_packets:
+        st.info(f"Showing {len(filtered_packets)} of {len(results['packet_analyses'])} packets")
+        df = pd.DataFrame(filtered_packets)
+        selected_packet = st.dataframe(
+            df,
+            column_config={
+                "Trading": st.column_config.Column("Trading", width="small"),
+                "Issues": st.column_config.NumberColumn("Issues", format="%d ⚠️"),
+                "Impact": st.column_config.Column("Impact", width="medium")
+            },
+            hide_index=True,
+            use_container_width=True,
+            on_select="rerun",
+            selection_mode="single-row"
+        )
+        if len(selected_packet.selection.rows) > 0:
+            selected_idx = selected_packet.selection.rows[0]
+            packet_idx = filtered_packets[selected_idx]['Index'] - 1
+            st.subheader(f"📋 Packet {packet_idx + 1} Details")
+            analysis = results['packet_analyses'][packet_idx]
+            packet_info = analysis['packet_info']
+            packet_analysis = analysis.get('packet_analysis', {})
+            detail_col1, detail_col2 = st.columns(2)
+            with detail_col1:
+                st.write("**Packet Information**")
+                st.json({
+                    "Protocol": packet_info['protocol'],
+                    "Source": f"{packet_info['src_ip']}:{packet_info['src_port']}",
+                    "Destination": f"{packet_info['dst_ip']}:{packet_info['dst_port']}",
+                    "Length": packet_info['length'],
+                    "Timestamp": datetime.fromtimestamp(packet_info['timestamp']).strftime('%Y-%m-%d %H:%M:%S.%f') if packet_info['timestamp'] else 'N/A'
+                })
+            with detail_col2:
+                if packet_analysis:
+                    st.write("**AI Analysis**")
+                    st.write(f"**Type:** {packet_analysis.get('packet_type', 'Unknown')}")
+                    st.write(f"**Trading Relevance:** {packet_analysis.get('trading_relevance', 'Unknown')}")
+                    st.write(f"**Performance Impact:** {packet_analysis.get('performance_impact', 'Unknown')}")
+                    issues = packet_analysis.get('issues', [])
+                    if issues:
+                        st.write("**Issues:**")
+                        for issue in issues:
+                            st.write(f"• ⚠️ {issue}")
+                    recommendations = packet_analysis.get('recommendations', [])
+                    if recommendations:
+                        st.write("**Recommendations:**")
+                        for rec in recommendations:
+                            st.write(f"• 💡 {rec}")
+    else:
+        st.warning("No packets match the current filters.")
 
 def render_recommendations(recommendations: List[Dict[str, str]]):
-    st.subheader("💡 System Recommendations")
+    st.subheader("🧠 Recommendations")
     priority_groups = {}
     for rec in recommendations:
         priority = rec.get('priority', 'Low')
@@ -375,62 +544,84 @@ def render_llm_packet_analysis(packet_analyses: List[Dict], max_display: int = 5
                         st.write(f"• ⚠️ {issue}")
                 else:
                     st.write("✅ **No issues detected**")
-                
                 recommendations = packet_analysis.get('recommendations', [])
                 if recommendations:
                     st.write("**Recommendations:**")
                     for rec in recommendations:
                         st.write(f"• 💡 {rec}")
 
-def render_detailed_file_stats(file_stats: Dict[str, Any]):
-    st.subheader("📁 File Statistics")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("File Size", f"{file_stats['file_size'] / (1024*1024):.2f} MB")
-        st.metric("Total Packets", f"{file_stats['packet_count']:,}")
-    with col2:
-        st.metric("Duration", f"{file_stats['duration_seconds']:.2f} seconds")
-        st.metric("Packets/Second", f"{file_stats['packets_per_second']:.2f}")
-    with col3:
-        if file_stats.get('first_timestamp'):
-            st.metric("Start Time", file_stats['first_timestamp'].strftime('%Y-%m-%d %H:%M:%S'))
-        if file_stats.get('last_timestamp'):
-            st.metric("End Time", file_stats['last_timestamp'].strftime('%Y-%m-%d %H:%M:%S'))
-
 def render_ai_chat_interface(analyzer, results):
-    st.subheader("🤖 AI Trading Assistant")
+    st.header("🤖 AI Assistant")
     if 'chat_history' not in st.session_state:
         st.session_state.chat_history = []
-    for message in st.session_state.chat_history:
-        if message["role"] == "user":
-            st.write(f"**You:** {message['content']}")
-        else:
-            st.write(f"**AI:** {message['content']}")
-    user_message = st.text_input("Ask about your network analysis:")
-    if st.button("Send") and user_message:
+        welcome_msg = f"""
+        👋 Hello! I'm your AI Assistant. I've analyzed your PCAP data:
+        📊 **Quick Summary:**
+        • {results['executive_summary']['total_packets']:,} total packets
+        • {results['executive_summary']['trading_packets']} trading packets
+        • {results['executive_summary']['health_score']}/100 health score
+        • {results['trading_stats'].get('latency_stats', {}).get('avg_ms', 0):.2f}ms average latency
+        
+        Ask me anything about your network analysis, trading performance, or specific issues!
+        """
+        st.session_state.chat_history.append({"role": "assistant", "content": welcome_msg})
+    chat_container = st.container()
+    with chat_container:
+        for i, message in enumerate(st.session_state.chat_history):
+            if message["role"] == "user":
+                with st.chat_message("user"):
+                    st.write(message['content'])
+            else:
+                with st.chat_message("assistant"):
+                    st.write(message['content'])
+    user_message = st.chat_input("Ask about your network analysis...")
+    if user_message:
+        st.session_state.chat_history.append({"role": "user", "content": user_message})
         context = f"""
         Analysis Results Summary:
         - Total Packets: {results['executive_summary']['total_packets']}
         - Trading Packets: {results['executive_summary']['trading_packets']}
         - Health Score: {results['executive_summary']['health_score']}/100
         - Issues Found: {results['executive_summary']['total_issues']}
+        - Critical Issues: {results['executive_summary']['critical_issues']}
         - Average Latency: {results['trading_stats'].get('latency_stats', {}).get('avg_ms', 0):.2f}ms
+        - P99 Latency: {results['trading_stats'].get('latency_stats', {}).get('p99_ms', 0):.2f}ms
         - Fill Rate: {(results['trading_stats'].get('total_executions', 0) / max(results['trading_stats'].get('total_orders', 1), 1) * 100):.1f}%
+        - Rejection Rate: {(results['trading_stats'].get('total_rejections', 0) / max(results['trading_stats'].get('total_orders', 1), 1) * 100):.1f}%
+        - Connection Health: {results['trading_stats'].get('connection_health', {}).get('health_score', 100)}/100
         """
         try:
-            ai_response = analyzer.llm_client.chat_query(user_message, context)
-            st.session_state.chat_history.append({"role": "user", "content": user_message})
-            st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
-            st.rerun()
+            with st.spinner("🤖 Thinking..."):
+                ai_response = analyzer.llm_client.chat_query(user_message, context)
+                st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
+                st.rerun()
         except Exception as e:
-            st.error(f"AI response failed: {str(e)}")
+            error_msg = f"Sorry, I encountered an error: {str(e)}"
+            st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
+            st.rerun()
+    chat_controls = st.columns([1, 1, 3])
+    with chat_controls[0]:
+        if st.button("🗑️ Clear Chat"):
+            st.session_state.chat_history = []
+            st.rerun()
+    with chat_controls[1]:
+        if st.button("💾 Export Chat"):
+            chat_export = "\n".join([
+                f"{'User' if msg['role'] == 'user' else 'AI'}: {msg['content']}"
+                for msg in st.session_state.chat_history
+            ])
+            st.download_button(
+                "📥 Download",
+                chat_export,
+                file_name=f"chat_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                mime="text/plain"
+            )
 
 def render_ai_session_analysis(llm_session_analysis):
-    st.subheader("🧠 AI-Powered Session Analysis")
+    st.subheader("🧠 AI Session Analysis")
     if not llm_session_analysis:
         st.error(f"An error was encountered while generating the results. Please try again.")
         return
-    st.write(llm_session_analysis)
     if isinstance(llm_session_analysis, dict):
         if 'session_health' in llm_session_analysis:
             st.write("**Session Health**")
@@ -440,13 +631,27 @@ def render_ai_session_analysis(llm_session_analysis):
             st.info(llm_session_analysis.get('trading_performance', 'No analysis available'))
         if 'risk_assessment' in llm_session_analysis:
             st.write("**Risk Assessment**")
-            st.warning(llm_session_analysis.get('risk_assessment', 'No assessment available'))
+            risk = llm_session_analysis.get('risk_assessment', [])
+            if isinstance(risk, list) and risk:
+                for item in risk:
+                    st.markdown(f"- ⚠️ {item}")
+            elif isinstance(risk, str):
+                st.warning(risk)
+            else:
+                st.info("No risk assessment available.")
         if 'compliance_notes' in llm_session_analysis:
             st.write("**Compliance Notes**")
             st.info(llm_session_analysis.get('compliance_notes', 'No notes available'))
         if 'recommendations' in llm_session_analysis:
-            st.write("**AI Optimization Recommendations**")
-            st.success(llm_session_analysis.get('recommendations', 'No recommendations available'))
+            st.write("**Optimization Recommendations**")
+            recs = llm_session_analysis.get('recommendations', [])
+            if isinstance(recs, list) and recs:
+                for item in recs:
+                    st.markdown(f"- ✅ {item}")
+            elif isinstance(recs, str):
+                st.success(recs)
+            else:
+                st.info("No recommendations available.")
 
 def render_ml_anomaly_analysis(anomalies, packet_analyses):
     st.subheader("🤖 Machine Learning Anomaly Detection")
@@ -495,7 +700,7 @@ def main():
     )
     if 'analysis_running' not in st.session_state:
         st.session_state.analysis_running = False
-    st.title("📊 Advanced PCAP Analysis Tool for Exchange Trading")
+    st.title("🚩 Advanced PCAP Analysis Tool for Exchange Trading")
     st.markdown(":red[Capture The Lag] provides you with a comprehensive network packet analysis with AI-powered insights.")
     st.sidebar.header("⚙️ Configuration")
     analyzer = StreamlitPCAPAnalyzer()
@@ -517,171 +722,30 @@ def main():
                     st.error(f"❌ Analysis failed: {results['error']}")
                 else:
                     tabs = st.tabs([
-                        "📋 Overview", 
-                        "🌐 Network Analysis", 
+                        "📊 Executive Summary", 
                         "📈 Trading Analysis", 
-                        "📦 Packet Details", 
-                        "💡 Recommendations",
+                        "🌐 Network Analysis", 
+                        "📦 Packet Analysis", 
                         "🧠 AI Analysis",
                         "🤖 AI Chat" 
                     ])
                     with tabs[0]:
-                        render_executive_summary(results['executive_summary'], results['trading_stats'])
-                        render_detailed_file_stats(results['file_stats'])
+                        render_executive_summary(results['executive_summary'], results['file_stats'], results['trading_stats'])
                     with tabs[1]:
-                        render_network_analysis(results['network_analysis'])
-                        if 'anomalies' in results:
-                            render_ml_anomaly_analysis(results['anomalies'], results['packet_analyses'])
-                        else:
-                            st.info("ML anomaly detection not available - requires sufficient data points")
+                        render_trading_analytics(results['trading_stats'])
                     with tabs[2]:
-                        st.subheader("📈 Trading Performance Analysis")
-                        trading_stats = results['trading_stats']
-                        latency_stats = trading_stats.get('latency_stats', {})
-                        if latency_stats and latency_stats.get('count', 0) > 0:
-                            st.write("**Latency Performance**")
-                            col1, col2, col3, col4, col5 = st.columns(5)
-                            col1.metric("Average Latency", f"{latency_stats.get('avg_ms', 0):.2f} ms")
-                            col2.metric("95th Percentile", f"{latency_stats.get('p95_ms', 0):.2f} ms")
-                            col3.metric("99th Percentile", f"{latency_stats.get('p99_ms', 0):.2f} ms")
-                            col4.metric("Max Latency", f"{latency_stats.get('max_ms', 0):.2f} ms")
-                            col5.metric("High Latency Count", f"{latency_stats.get('high_latency_count', 0)}")
-                            if latency_stats.get('count', 0) > 1:
-                                latency_data = {
-                                    'Metric': ['Min', 'Average', 'Median', '95th %ile', '99th %ile', 'Max'],
-                                    'Latency (ms)': [
-                                        latency_stats.get('min_ms', 0),
-                                        latency_stats.get('avg_ms', 0),
-                                        latency_stats.get('median_ms', 0),
-                                        latency_stats.get('p95_ms', 0),
-                                        latency_stats.get('p99_ms', 0),
-                                        latency_stats.get('max_ms', 0)
-                                    ]
-                                }
-                                fig = px.bar(
-                                    x=latency_data['Metric'],
-                                    y=latency_data['Latency (ms)'],
-                                    title="Latency Distribution",
-                                    color=latency_data['Latency (ms)'],
-                                    color_continuous_scale='RdYlGn_r'
-                                )
-                                st.plotly_chart(fig, use_container_width=True)
-                        st.write("**Order Flow Analysis**")
-                        col1, col2, col3, col4 = st.columns(4)
-                        col1.metric("Total Orders", trading_stats.get('total_orders', 0))
-                        col2.metric("Executions", trading_stats.get('total_executions', 0))
-                        col3.metric("Rejections", trading_stats.get('total_rejections', 0))
-                        col4.metric("Cancellations", trading_stats.get('total_cancellations', 0))
-                        order_flow_data = {
-                            'Type': ['Orders', 'Executions', 'Rejections', 'Cancellations'],
-                            'Count': [
-                                trading_stats.get('total_orders', 0),
-                                trading_stats.get('total_executions', 0), 
-                                trading_stats.get('total_rejections', 0),
-                                trading_stats.get('total_cancellations', 0)
-                            ]
-                        }
-                        if sum(order_flow_data['Count']) > 0:
-                            fig = px.bar(
-                                x=order_flow_data['Type'],
-                                y=order_flow_data['Count'],
-                                title="Order Flow Distribution",
-                                color=order_flow_data['Count'],
-                                color_continuous_scale='viridis'
-                            )
-                            st.plotly_chart(fig, use_container_width=True)
-                        rejection_analysis = trading_stats.get('rejection_analysis', {})
-                        if rejection_analysis.get('count', 0) > 0:
-                            st.warning(f"⚠️ Rejection Rate: {rejection_analysis['rejection_rate']:.2f}%")
-                            
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.write("**Rejection Statistics**")
-                                st.metric("Total Rejections", rejection_analysis['count'])
-                                st.metric("Rejection Rate", f"{rejection_analysis['rejection_rate']:.2f}%")
-                            with col2:
-                                reasons = rejection_analysis.get('reasons', {})
-                                if reasons:
-                                    st.write("**Rejection Reasons**")
-                                    reasons_df = pd.DataFrame([
-                                        {'Reason': reason, 'Count': count}
-                                        for reason, count in reasons.items()
-                                    ])
-                                    st.dataframe(reasons_df, hide_index=True)
-                                    fig = px.pie(
-                                        reasons_df,
-                                        values='Count',
-                                        names='Reason',
-                                        title="Rejection Reasons Distribution"
-                                    )
-                                    st.plotly_chart(fig, use_container_width=True)
-                        connection_health = trading_stats.get('connection_health', {})
-                        if connection_health:
-                            st.write("**Connection Health**")
-                            col1, col2, col3, col4 = st.columns(4)
-                            col1.metric("Active Connections", connection_health.get('active_connections', 0))
-                            col2.metric("Connection Resets", connection_health.get('connection_resets', 0))
-                            col3.metric("Timeouts", connection_health.get('timeouts', 0))
-                            col4.metric("Health Score", f"{connection_health.get('health_score', 100)}/100")
+                        render_network_analysis(results['network_analysis'], results['anomalies'], results['packet_analyses'])
                     with tabs[3]:
-                        st.subheader("📦 Detailed Packet Analysis")
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            show_trading_only = st.checkbox("Show Trading Packets Only")
-                        with col2:
-                            show_issues_only = st.checkbox("Show Packets with Issues Only")
-                        with col3:
-                            max_packets = st.number_input("Max Packets to Display", min_value=10, max_value=1000, value=100)
-                        packet_data = []
-                        for analysis in results['packet_analyses'][:max_packets]:
-                            packet_info = analysis['packet_info']
-                            is_trading = analysis['trading_analysis']['is_trading']
-                            issues_count = len(analysis.get('llm_analysis', {}).get('issues', []))
-                            if show_trading_only and not is_trading:
-                                continue
-                            if show_issues_only and issues_count == 0:
-                                continue
-                            packet_data.append({
-                                'Time': datetime.fromtimestamp(packet_info['timestamp']) if packet_info['timestamp'] else 'N/A',
-                                'Protocol': packet_info['protocol'],
-                                'Source': f"{packet_info['src_ip']}:{packet_info['src_port']}",
-                                'Destination': f"{packet_info['dst_ip']}:{packet_info['dst_port']}",
-                                'Length': packet_info['length'],
-                                'Trading': '✓' if is_trading else '',
-                                'Issues': issues_count
-                            })
-                        if packet_data:
-                            df = pd.DataFrame(packet_data)
-                            st.dataframe(
-                                df,
-                                column_config={
-                                    "Trading": st.column_config.Column(
-                                        "Trading Packet",
-                                        help="Indicates if the packet contains trading data",
-                                        width="small",
-                                    ),
-                                    "Issues": st.column_config.NumberColumn(
-                                        "Issues",
-                                        help="Number of issues detected",
-                                        format="%d ⚠️"
-                                    )
-                                },
-                                hide_index=True,
-                                use_container_width=True
-                            )
-                        else:
-                            st.info("No packets match the selected filters.")
+                        render_packet_analysis(results)
                     with tabs[4]:
                         render_recommendations(results['recommendations'])
-                        
-                    with tabs[5]:
                         render_llm_packet_analysis(results['packet_analyses'])
                         st.markdown("---")
                         if 'llm_session_analysis' in results:
                             render_ai_session_analysis(results['llm_session_analysis'])
                         else:
                             st.info("AI session analysis not available for this result set.")
-                    with tabs[6]:
+                    with tabs[5]:
                         render_ai_chat_interface(analyzer, results)
     elif analysis_mode == "Batch File Analysis":
         st.subheader("📚 Batch File Analysis")
